@@ -1,0 +1,69 @@
+{
+  "name": "AI Voice Agent for Saudi Businesses",
+  "description": "Complete AI voice agent system that handles customer calls in Arabic and English, books appointments, and manages business operations. Perfect for clinics, shops, and service businesses in Saudi Arabia.",
+  "image": "heroku/python",
+  "repository": "https://github.com/your-username/ai-voice-agent-saudi",
+  "keywords": [
+    "ai",
+    "voice",
+    "agent",
+    "saudi",
+    "arabic",
+    "twilio",
+    "openai",
+    "elevenlabs",
+    "appointment",
+    "booking",
+    "business",
+    "automation"
+  ],
+  "env": {
+    "FLASK_ENV": {
+      "description": "Flask environment (production for live deployment)",
+      "value": "production"
+    },
+    "SECRET_KEY": {
+      "description": "Secret key for Flask sessions (generate a random string)",
+      "generator": "secret"
+    },
+    "OPENAI_API_KEY": {
+      "description": "OpenAI API key for conversation processing. Get from https://platform.openai.com/api-keys",
+      "required": true
+    },
+    "ELEVENLABS_API_KEY": {
+      "description": "ElevenLabs API key for voice synthesis. Get from https://elevenlabs.io/speech-synthesis",
+      "required": true
+    },
+    "TWILIO_ACCOUNT_SID": {
+      "description": "Twilio Account SID for phone integration. Get from https://console.twilio.com",
+      "required": true
+    },
+    "TWILIO_AUTH_TOKEN": {
+      "description": "Twilio Auth Token for phone integration. Get from https://console.twilio.com",
+      "required": true
+    }
+  },
+  "addons": [
+    {
+      "plan": "heroku-postgresql:essential-0",
+      "as": "DATABASE"
+    }
+  ],
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "scripts": {
+    "postdeploy": "python -c \"from src.main import app; from src.models.voice_models import db; app.app_context().push(); db.create_all(); print('Database initialized successfully')\""
+  },
+  "success_url": "/",
+  "website": "https://your-domain.com"
+}
+
