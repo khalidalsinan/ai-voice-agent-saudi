@@ -3,7 +3,6 @@ from src.models.voice_models import Business
 from src.services.voice_service import VoiceService
 from src.models.user import db
 import os
-from datetime import datetime
 
 business_bp = Blueprint('business', __name__)
 
@@ -24,8 +23,7 @@ def get_businesses():
                 'phone': b.phone,
                 'email': b.email,
                 'description': b.description,
-                'hours': b.hours,
-                'created_at': b.created_at.isoformat() if b.created_at else None
+                'hours': b.hours
             } for b in businesses]
         })
     except Exception as e:
@@ -44,8 +42,7 @@ def create_business():
             phone=data.get('phone', ''),
             email=data.get('email', ''),
             description=data.get('description', ''),
-            hours=data.get('hours', ''),
-            created_at=datetime.utcnow()
+            hours=data.get('hours', '')
         )
         
         db.session.add(business)
@@ -92,7 +89,15 @@ def update_business(business_id):
         
         return jsonify({
             'success': True,
-            'message': 'Business updated successfully'
+            'message': 'Business updated successfully',
+            'business': {
+                'id': business.id,
+                'name': business.name,
+                'phone': business.phone,
+                'email': business.email,
+                'description': business.description,
+                'hours': business.hours
+            }
         })
         
     except Exception as e:
