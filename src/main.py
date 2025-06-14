@@ -10,7 +10,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__)))
 
 from flask import Flask, jsonify, render_template_string
 from flask_cors import CORS
-from src.models.voice_models import db
+from src.models.user import db
 from src.routes.user import user_bp
 from src.routes.voice_routes import voice_bp
 from src.routes.business_routes import business_bp
