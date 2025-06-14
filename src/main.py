@@ -1,56 +1,84 @@
 import os
-import sys
-from dotenv import load_dotenv
-
-load_dotenv()
-sys.path.append(os.path.join(os.path.dirname(__file__)))
-
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-from src.models.user import db
-from src.routes.user import user_bp
-from src.routes.business import business_bp
 
-def create_app():
-    app = Flask(__name__)
-    
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key')
-    
-    database_url = os.getenv('DATABASE_URL')
-    if database_url and database_url.startswith('postgres://'):
-        database_url = database_url.replace('postgres://', 'postgresql://', 1)
-    
-    app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'sqlite:///voice_agent.db'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    
-    CORS(app, origins="*")
-    db.init_app(app)
-    
-    app.register_blueprint(user_bp, url_prefix='/api')
-    app.register_blueprint(business_bp, url_prefix='/api')
-    
-    @app.route('/health')
-    def health_check():
-        return jsonify({
-            "status": "healthy",
-            "service": "AI Voice Agent System"
-        })
-    
-    @app.route('/')
-    def index():
-        return render_template_string('''
-        <h1>🤖 AI Voice Agent System</h1>
-        <p>✅ System is ONLINE and working!</p>
-        <a href="/health">Health Check</a>
-        ''')
-    
-    with app.app_context():
-        db.create_all()
-    
-    return app
+app = Flask(__name__)
+CORS(app)
 
-app = create_app()
+# Simple in-memory storage (no database!)
+businesses = []
+business_counter = 1
+
+@app.route('/')
+def home():
+    return '''
+    <h1>🤖 AI Voice Agent System</h1>
+    <h2>✅ WORKING!</h2>
+    <p><a href="/health">Health Check</a></p>
+    <p><a href="/api/businesses">View Businesses</a></p>
+    '''
+
+@app.route('/health')
+def health():
+    return jsonify({
+        'status': 'healthy',
+        'message': 'AI Voice Agent is working!',
+        'openai_configured': bool(os.getenv('OPENAI_API_KEY')),
+        'elevenlabs_configured': bool(os.getenv('ELEVENLABS_API_KEY'))
+    })
+
+@app.route('/api/businesses', methods=['GET'])
+def get_businesses():
+    return jsonify({
+        'success': True,
+        'businesses': businesses
+    })
+
+@app.route('/api/businesses', methods=['POST'])
+def create_business():
+    global business_counter
+    data = request.get_json()
+    
+    if not data or not data.get('name'):
+        return jsonify({'success': False, 'error': 'Business name required'}), 400
+    
+    business = {
+        'id': business_counter,
+        'name': data['name'],
+        'description': data.get('description', ''),
+        'created': True
+    }
+    
+    businesses.append(business)
+    business_counter += 1
+    
+    return jsonify({
+        'success': True,
+        'message': 'Business created!',
+        'business': business
+    })
+
+@app.route('/api/businesses/<int:business_id>/test-voice', methods=['POST'])
+def test_voice():
+    data = request.get_json()
+    message = data.get('message', '')
+    
+    # Simple response
+    is_arabic = any(char in message for char in 'أبتثجحخدذرزسشصضطظعغفقكلمنهوي')
+    
+    if is_arabic:
+        response = "مرحباً! كيف يمكنني مساعدتك؟"
+    else:
+        response = "Hello! How can I help you?"
+    
+    return jsonify({
+        'success': True,
+        'result': {
+            'response': response,
+            'intent': 'general'
+        }
+    })
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
