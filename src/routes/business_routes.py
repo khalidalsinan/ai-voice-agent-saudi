@@ -19,11 +19,7 @@ def get_businesses():
             'success': True,
             'businesses': [{
                 'id': b.id,
-                'name': b.name,
-                'phone': b.phone,
-                'email': b.email,
-                'description': b.description,
-                'hours': b.hours
+                'name': b.name
             } for b in businesses]
         })
     except Exception as e:
@@ -37,13 +33,7 @@ def create_business():
         if not data or not data.get('name'):
             return jsonify({'success': False, 'error': 'Business name is required'}), 400
         
-        business = Business(
-            name=data['name'],
-            phone=data.get('phone', ''),
-            email=data.get('email', ''),
-            description=data.get('description', ''),
-            hours=data.get('hours', '')
-        )
+        business = Business(name=data['name'])
         
         db.session.add(business)
         db.session.commit()
@@ -53,11 +43,7 @@ def create_business():
             'message': 'Business created successfully',
             'business': {
                 'id': business.id,
-                'name': business.name,
-                'phone': business.phone,
-                'email': business.email,
-                'description': business.description,
-                'hours': business.hours
+                'name': business.name
             }
         })
         
@@ -76,14 +62,6 @@ def update_business(business_id):
         
         if 'name' in data:
             business.name = data['name']
-        if 'phone' in data:
-            business.phone = data['phone']
-        if 'email' in data:
-            business.email = data['email']
-        if 'description' in data:
-            business.description = data['description']
-        if 'hours' in data:
-            business.hours = data['hours']
         
         db.session.commit()
         
@@ -92,11 +70,7 @@ def update_business(business_id):
             'message': 'Business updated successfully',
             'business': {
                 'id': business.id,
-                'name': business.name,
-                'phone': business.phone,
-                'email': business.email,
-                'description': business.description,
-                'hours': business.hours
+                'name': business.name
             }
         })
         
@@ -115,11 +89,7 @@ def test_voice_processing(business_id):
         
         business_data = {
             'id': business.id,
-            'name': business.name,
-            'description': business.description,
-            'hours': business.hours,
-            'phone': business.phone,
-            'email': business.email
+            'name': business.name
         }
         
         result = voice_service.process_message(
@@ -135,3 +105,4 @@ def test_voice_processing(business_id):
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
