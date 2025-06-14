@@ -1,206 +1,292 @@
 import os
 import json
 import logging
-from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
+from openai import OpenAI
+from elevenlabs import ElevenLabs
+import asyncio
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class VoiceService:
-    """Voice Processing Service for Saudi businesses."""
+class VoiceProcessor:
+    """Simplified voice processing for Heroku deployment"""
     
-    def __init__(self, openai_api_key: Optional[str] = None, elevenlabs_api_key: Optional[str] = None):
-        """Initialize the voice service with API keys."""
-        self.openai_api_key = openai_api_key
-        self.elevenlabs_api_key = elevenlabs_api_key
-        self.conversation_contexts = {}
+    def __init__(self):
+        self.elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
+        self.client = None
         
-        # Initialize OpenAI client if key is provided
-        if self.openai_api_key:
+        if self.elevenlabs_key and self.elevenlabs_key != "demo_key_placeholder":
             try:
-                from openai import OpenAI
-                self.client = OpenAI(api_key=self.openai_api_key)
-                logger.info("OpenAI client initialized successfully")
+                self.client = ElevenLabs(api_key=self.elevenlabs_key)
+                logger.info("ElevenLabs client initialized successfully")
             except Exception as e:
-                logger.error(f"Failed to initialize OpenAI client: {e}")
+                logger.warning(f"ElevenLabs initialization failed: {str(e)}")
                 self.client = None
         else:
-            self.client = None
-            logger.warning("No OpenAI API key provided, using mock responses")
+            logger.warning("ElevenLabs API key not configured - using mock responses")
     
-    def get_current_time_info(self) -> Dict[str, Any]:
-        """Get current time information (simplified without timezone)."""
-        now = datetime.now()
-        yesterday = now - timedelta(days=1)
-        tomorrow = now + timedelta(days=1)
-        
-        # Day names in Arabic
-        arabic_days = {
-            'Monday': 'الاثنين', 'Tuesday': 'الثلاثاء', 'Wednesday': 'الأربعاء',
-            'Thursday': 'الخميس', 'Friday': 'الجمعة', 'Saturday': 'السبت', 'Sunday': 'الأحد'
-        }
-        
-        return {
-            'current_date': now.strftime('%Y-%m-%d'),
-            'current_time': now.strftime('%I:%M %p'),
-            'current_day_english': now.strftime('%A'),
-            'current_day_arabic': arabic_days.get(now.strftime('%A'), now.strftime('%A')),
-            'yesterday_day_english': yesterday.strftime('%A'),
-            'yesterday_day_arabic': arabic_days.get(yesterday.strftime('%A'), yesterday.strftime('%A')),
-            'tomorrow_day_english': tomorrow.strftime('%A'),
-            'tomorrow_day_arabic': arabic_days.get(tomorrow.strftime('%A'), tomorrow.strftime('%A')),
-            'formatted_date': now.strftime('%A, %B %d, %Y'),
-            'hour': now.hour,
-            'is_business_hours': 8 <= now.hour <= 22
-        }
-    
-    def create_intelligent_prompt(self, business_data: Dict[str, Any]) -> str:
-        """Create an intelligent system prompt with business and time context."""
-        time_info = self.get_current_time_info()
-        business_name = business_data.get('name', 'Business')
-        business_description = business_data.get('description', '')
-        business_hours = business_data.get('hours', '')
-        
-        system_prompt = f"""You are an intelligent AI assistant for {business_name}, a business in Saudi Arabia.
-
-CURRENT DATE & TIME:
-- Today is {time_info['formatted_date']} ({time_info['current_day_arabic']})
-- Current time: {time_info['current_time']}
-- Yesterday was {time_info['yesterday_day_english']} ({time_info['yesterday_day_arabic']})
-- Tomorrow will be {time_info['tomorrow_day_english']} ({time_info['tomorrow_day_arabic']})
-- Business status: {'Open' if time_info['is_business_hours'] else 'Closed'} (typical hours)
-
-BUSINESS INFORMATION:
-Name: {business_name}
-Description: {business_description}
-Hours: {business_hours}
-
-INSTRUCTIONS:
-- Respond in the same language the customer uses (Arabic or English)
-- Be professional and helpful
-- When asked about "today" - refer to {time_info['current_day_english']}
-- For appointments, suggest available times
-- Handle both Arabic and English naturally
-- Provide specific information about services and pricing when available"""
-
-        return system_prompt
-    
-    def detect_intent(self, message: str) -> Dict[str, Any]:
-        """Detect customer intent from their message."""
-        message_lower = message.lower()
-        
-        # Intent patterns
-        if any(word in message_lower for word in ['book', 'appointment', 'schedule', 'موعد', 'حجز', 'احجز']):
-            return {'intent': 'booking', 'confidence': 0.9}
-        elif any(word in message_lower for word in ['price', 'cost', 'سعر', 'كم', 'تكلفة']):
-            return {'intent': 'pricing', 'confidence': 0.8}
-        elif any(word in message_lower for word in ['hours', 'open', 'closed', 'ساعات', 'مفتوح', 'مغلق']):
-            return {'intent': 'hours', 'confidence': 0.8}
-        elif any(word in message_lower for word in ['service', 'offer', 'خدمات', 'تقدمون']):
-            return {'intent': 'services', 'confidence': 0.7}
-        else:
-            return {'intent': 'general', 'confidence': 0.5}
-    
-    def process_message(self, message: str, business_data: Dict[str, Any], conversation_id: str = "default") -> Dict[str, Any]:
-        """Process customer message with AI response."""
+    def synthesize_speech(self, text: str, voice_id: str = "pNInz6obpgDQGcFmaJgB") -> Optional[bytes]:
+        """Convert text to speech using ElevenLabs"""
         try:
-            # Get conversation history
-            conversation_history = self.conversation_contexts.get(conversation_id, [])
+            if not self.client:
+                logger.warning("ElevenLabs not configured - returning None for speech synthesis")
+                return None
             
-            # Detect intent
-            intent_info = self.detect_intent(message)
+            # Generate speech
+            audio = self.client.generate(
+                text=text,
+                voice=voice_id,
+                model="eleven_multilingual_v2"
+            )
             
-            # Create intelligent prompt
-            system_prompt = self.create_intelligent_prompt(business_data)
+            return b''.join(audio)
             
-            # Add current message to history
-            conversation_history.append({"role": "user", "content": message})
-            
-            if self.client:
-                # Use real OpenAI API
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    *conversation_history[-5:]  # Keep last 5 messages
+        except Exception as e:
+            logger.error(f"Speech synthesis error: {str(e)}")
+            return None
+    
+    def get_available_voices(self) -> list:
+        """Get available voices from ElevenLabs"""
+        try:
+            if not self.client:
+                return [
+                    {"voice_id": "demo_voice_1", "name": "Demo Arabic Voice"},
+                    {"voice_id": "demo_voice_2", "name": "Demo English Voice"}
                 ]
-                
-                response = self.client.chat.completions.create(
-                    model="gpt-4",
-                    messages=messages,
-                    max_tokens=300,
-                    temperature=0.7
-                )
-                
-                ai_response = response.choices[0].message.content
-                
+            
+            voices = self.client.voices.get_all()
+            return [{"voice_id": voice.voice_id, "name": voice.name} for voice in voices.voices]
+            
+        except Exception as e:
+            logger.error(f"Error getting voices: {str(e)}")
+            return []
+
+class ConversationEngine:
+    """Simplified conversation engine for Heroku deployment"""
+    
+    def __init__(self):
+        self.openai_key = os.getenv("OPENAI_API_KEY")
+        self.client = None
+        
+        if self.openai_key and self.openai_key != "demo_key_placeholder":
+            try:
+                self.client = OpenAI(api_key=self.openai_key)
+                logger.info("OpenAI client initialized successfully")
+            except Exception as e:
+                logger.warning(f"OpenAI initialization failed: {str(e)}")
+                self.client = None
+        else:
+            logger.warning("OpenAI API key not configured - using mock responses")
+        
+        self.conversation_contexts = {}
+    
+    def process_message(self, business_id: str, message: str, business_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Process customer message and generate response"""
+        try:
+            # Get or create conversation context
+            if business_id not in self.conversation_contexts:
+                self.conversation_contexts[business_id] = {
+                    "messages": [],
+                    "business_config": business_config,
+                    "intent_history": []
+                }
+            
+            context = self.conversation_contexts[business_id]
+            
+            # Add customer message to context
+            context["messages"].append({
+                "role": "user",
+                "content": message
+            })
+            
+            # Generate response
+            if not self.client:
+                # Use mock response for testing
+                ai_response = self._generate_mock_response(message, business_config)
             else:
-                # Generate mock response
-                ai_response = self.generate_mock_response(message, business_data, intent_info)
+                # Use OpenAI for real conversation
+                ai_response = self._generate_ai_response(context, business_config)
             
-            # Add AI response to history
-            conversation_history.append({"role": "assistant", "content": ai_response})
+            # Add AI response to context
+            context["messages"].append({
+                "role": "assistant",
+                "content": ai_response
+            })
             
-            # Update conversation context
-            self.conversation_contexts[conversation_id] = conversation_history
+            # Analyze intent
+            intent = self._analyze_intent(message, ai_response)
+            context["intent_history"].append(intent)
             
             return {
-                'response': ai_response,
-                'intent': intent_info['intent'],
-                'confidence': intent_info['confidence'],
-                'business_name': business_data.get('name', 'Business'),
-                'timestamp': datetime.now().isoformat()
+                "response": ai_response,
+                "intent": intent,
+                "requires_action": intent.get("action_required", False)
             }
             
         except Exception as e:
-            logger.error(f"Error processing message: {e}")
+            logger.error(f"Error processing message: {str(e)}")
             return {
-                'response': "I apologize, but I'm experiencing technical difficulties. Please try again.",
-                'intent': 'error',
-                'confidence': 0.0,
-                'error': str(e)
+                "response": "I apologize, but I'm experiencing technical difficulties. Please hold while I connect you to a human agent.",
+                "intent": {"type": "error", "action_required": True},
+                "requires_action": True
             }
     
-    def generate_mock_response(self, message: str, business_data: Dict[str, Any], intent_info: Dict[str, Any]) -> str:
-        """Generate intelligent mock responses for testing."""
-        business_name = business_data.get('name', 'Business')
-        time_info = self.get_current_time_info()
-        intent = intent_info['intent']
-        
-        # Detect language
-        is_arabic = any(char in message for char in 'أبتثجحخدذرزسشصضطظعغفقكلمنهوي')
-        
-        if intent == 'booking':
-            if is_arabic:
-                return f"مرحباً بك في {business_name}! يمكنني مساعدتك في حجز موعد. اليوم هو {time_info['current_day_arabic']} ولدينا مواعيد متاحة. ما الوقت المناسب لك؟"
-            else:
-                return f"Hello! Welcome to {business_name}. I can help you book an appointment. Today is {time_info['current_day_english']} and we have availability. What time works best for you?"
-        
-        elif intent == 'hours':
-            if is_arabic:
-                return f"نحن في {business_name} مفتوحون اليوم ({time_info['current_day_arabic']}) والوقت الحالي {time_info['current_time']}. ساعات عملنا من الأحد إلى الخميس 8 صباحاً - 10 مساءً."
-            else:
-                return f"We at {business_name} are open today ({time_info['current_day_english']}) and it's currently {time_info['current_time']}. Our hours are Sunday to Thursday, 8 AM to 10 PM."
-        
-        elif intent == 'pricing':
-            if is_arabic:
-                return f"أسعارنا في {business_name} تنافسية جداً. الكشف العام 150 ريال، والتحاليل تبدأ من 80 ريال. هل تريد معرفة سعر خدمة معينة؟"
-            else:
-                return f"Our prices at {business_name} are very competitive. General consultation is 150 SAR, lab tests start from 80 SAR. Would you like to know about a specific service?"
-        
-        elif intent == 'services':
-            if is_arabic:
-                return f"نقدم في {business_name} خدمات شاملة: الكشف العام، التحاليل الطبية، والاستشارات المتخصصة. كيف يمكنني مساعدتك؟"
-            else:
-                return f"At {business_name}, we offer comprehensive services: general consultations, lab tests, and specialist consultations. How can I help you?"
-        
-        else:
-            if is_arabic:
-                return f"مرحباً بك في {business_name}! كيف يمكنني مساعدتك اليوم؟ يمكنني مساعدتك في حجز المواعيد أو الإجابة على استفساراتك."
-            else:
-                return f"Welcome to {business_name}! How can I help you today? I can assist with appointments, pricing, or answer any questions you may have."
+    def _generate_ai_response(self, context: Dict[str, Any], business_config: Dict[str, Any]) -> str:
+        """Generate AI response using OpenAI"""
+        try:
+            business_name = business_config.get("name", "Business")
+            
+            system_prompt = f"""You are a helpful AI assistant for {business_name}, a business in Saudi Arabia. 
+            You can communicate in both Arabic and English. Your role is to:
+            
+            1. Answer questions about services, pricing, and business hours
+            2. Help customers book appointments
+            3. Provide helpful information about the business
+            4. Be polite, professional, and culturally appropriate
+            
+            Business Information:
+            - Name: {business_name}
+            - Services: General consultation, treatments, and specialized care
+            - Hours: Sunday-Thursday 9AM-5PM, Friday 2PM-6PM, Saturday 9AM-1PM
+            - Pricing: Consultation 150 SAR, Basic treatment 200 SAR, Specialized care 300 SAR
+            
+            Always be helpful and try to assist the customer with their needs."""
+            
+            messages = [
+                {"role": "system", "content": system_prompt}
+            ] + context["messages"]
+            
+            response = self.client.chat.completions.create(
+                model="gpt-4",
+                messages=messages,
+                max_tokens=300,
+                temperature=0.7
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            logger.error(f"OpenAI API error: {str(e)}")
+            return self._generate_mock_response(context["messages"][-1]["content"], business_config)
     
-    def clear_conversation_context(self, conversation_id: str = "default"):
-        """Clear conversation history for a specific conversation."""
-        if conversation_id in self.conversation_contexts:
-            del self.conversation_contexts[conversation_id]
+    def _generate_mock_response(self, message: str, business_config: Dict[str, Any]) -> str:
+        """Generate mock response for testing without OpenAI"""
+        business_name = business_config.get("name", "Business")
+        message_lower = message.lower()
+        
+        # Arabic greeting detection
+        if any(word in message_lower for word in ["مرحبا", "السلام", "أهلا", "صباح", "مساء"]):
+            return f"مرحباً بك في {business_name}! كيف يمكنني مساعدتك اليوم؟"
+        
+        # English greeting
+        elif any(word in message_lower for word in ["hello", "hi", "good morning", "good afternoon", "good evening"]):
+            return f"Hello! Welcome to {business_name}. How can I help you today?"
+        
+        # Service inquiry
+        elif any(word in message_lower for word in ["service", "services", "خدمة", "خدمات", "what do you offer"]):
+            return f"We offer several services at {business_name}:\n- General consultation (150 SAR)\n- Basic treatment (200 SAR)\n- Specialized care (300 SAR)\n\nWould you like to know more about any specific service or book an appointment?"
+        
+        # Pricing inquiry
+        elif any(word in message_lower for word in ["price", "cost", "how much", "سعر", "كم", "تكلفة", "pricing"]):
+            return "Our current pricing is:\n- Consultation: 150 SAR\n- Basic treatment: 200 SAR\n- Specialized care: 300 SAR\n\nWould you like to book an appointment?"
+        
+        # Booking inquiry
+        elif any(word in message_lower for word in ["book", "appointment", "schedule", "حجز", "موعد", "reserve"]):
+            return "I'd be happy to help you book an appointment! What service would you like to schedule, and what date and time work best for you? We're available:\n- Sunday-Thursday: 9 AM to 5 PM\n- Friday: 2 PM to 6 PM\n- Saturday: 9 AM to 1 PM"
+        
+        # Hours inquiry
+        elif any(word in message_lower for word in ["hours", "open", "close", "time", "ساعات", "مفتوح", "وقت", "when"]):
+            return f"Our business hours are:\n- Sunday to Thursday: 9 AM to 5 PM\n- Friday: 2 PM to 6 PM\n- Saturday: 9 AM to 1 PM\n\nWhen would you like to visit {business_name}?"
+        
+        # Location inquiry
+        elif any(word in message_lower for word in ["where", "location", "address", "أين", "موقع", "عنوان"]):
+            return f"We're located in Riyadh, Saudi Arabia. For the exact address and directions, please call us or visit our website. Would you like to book an appointment?"
+        
+        # Default response
+        else:
+            return f"Thank you for contacting {business_name}. I'm here to help with:\n- Information about our services and pricing\n- Booking appointments\n- Business hours and location\n- Any other questions you may have\n\nHow can I assist you today?"
+    
+    def _analyze_intent(self, customer_message: str, ai_response: str) -> Dict[str, Any]:
+        """Analyze customer intent from the conversation"""
+        message_lower = customer_message.lower()
+        
+        # Booking intent
+        if any(word in message_lower for word in ["book", "appointment", "schedule", "حجز", "موعد", "reserve"]):
+            return {
+                "type": "booking",
+                "confidence": 0.9,
+                "action_required": True,
+                "extracted_info": {
+                    "service_requested": "general",
+                    "urgency": "normal"
+                }
+            }
+        
+        # Pricing intent
+        elif any(word in message_lower for word in ["price", "cost", "how much", "سعر", "كم", "تكلفة"]):
+            return {
+                "type": "pricing_inquiry",
+                "confidence": 0.8,
+                "action_required": False,
+                "extracted_info": {
+                    "service_interest": "general"
+                }
+            }
+        
+        # Hours intent
+        elif any(word in message_lower for word in ["hours", "open", "close", "time", "ساعات", "مفتوح", "وقت"]):
+            return {
+                "type": "hours_inquiry",
+                "confidence": 0.8,
+                "action_required": False
+            }
+        
+        # Service inquiry
+        elif any(word in message_lower for word in ["service", "services", "خدمة", "خدمات", "what do you offer"]):
+            return {
+                "type": "service_inquiry",
+                "confidence": 0.7,
+                "action_required": False
+            }
+        
+        # Greeting
+        elif any(word in message_lower for word in ["hello", "hi", "مرحبا", "السلام", "أهلا"]):
+            return {
+                "type": "greeting",
+                "confidence": 0.9,
+                "action_required": False
+            }
+        
+        # Default
+        else:
+            return {
+                "type": "general_inquiry",
+                "confidence": 0.5,
+                "action_required": False
+            }
+    
+    def get_conversation_summary(self, business_id: str) -> Dict[str, Any]:
+        """Get conversation summary"""
+        if business_id not in self.conversation_contexts:
+            return {"summary": "No conversation found", "outcome": "unknown"}
+        
+        context = self.conversation_contexts[business_id]
+        intents = context.get("intent_history", [])
+        
+        # Determine primary intent and outcome
+        if any(intent["type"] == "booking" for intent in intents):
+            outcome = "appointment_requested"
+        elif any(intent["type"] == "pricing_inquiry" for intent in intents):
+            outcome = "pricing_provided"
+        elif any(intent["type"] == "service_inquiry" for intent in intents):
+            outcome = "service_info_provided"
+        else:
+            outcome = "general_inquiry"
+        
+        return {
+            "summary": f"Customer conversation with {len(context['messages'])} messages",
+            "outcome": outcome,
+            "intents_detected": [intent["type"] for intent in intents],
+            "total_messages": len(context["messages"])
+        }
+
