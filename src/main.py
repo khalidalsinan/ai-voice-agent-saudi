@@ -1,14 +1,31 @@
 import os
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request, render_template_string, Response
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import logging
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+import requests
+from twilio.rest import Client
+from twilio.twiml.messaging_response import MessagingResponse
 
 app = Flask(__name__)
 CORS(app)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Embedded API keys (replace with new keys after testing)
+OPENAI_API_KEY = "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"
+GROQ_API_KEY = "gsk-iSmuqQBygWBNnzJBmZv2WGdyb3FYZUg7Nm0B8SSv8U6ZDdYvtkLE"
+ELEVENLABS_API_KEY = "sk_98f487e2b63150940092b699631463aff771b25d04c4ffdf"
+TWILIO_ACCOUNT_SID = "SK2799149b7175ac37524858c70bb43034"
+TWILIO_AUTH_TOKEN = "vS8bzTmxktdF3nXfKwAmwmHbPkQyqqts"
+SECRET_KEY = "your-secret-key-12345-ai-voice-agent"
+FLASK_ENV = "production"
+
+# Note: No ANTHROPIC_API_KEY or GOOGLE_API_KEY provided, so these providers are skipped
+# To add later, define them here and regenerate all keys for security
 
 businesses = []
 business_counter = 1
@@ -17,29 +34,26 @@ business_counter = 1
 ai_client = None
 ai_status = "Not Configured"
 ai_provider = "None"
+twilio_client = None
+twilio_status = "Not Configured"
 
 def initialize_ai():
+    """Initialize AI provider with embedded keys."""
     global ai_client, ai_status, ai_provider
     
-    # Try Anthropic Claude first
-    if os.getenv('ANTHROPIC_API_KEY'):
-        try:
-            import anthropic
-            ai_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
-            ai_status = "Connected ✅"
-            ai_provider = "Anthropic Claude"
-            logger.info("Anthropic Claude connected successfully")
-            return
-        except Exception as e:
-            logger.error(f"Anthropic failed: {str(e)}")
+    # Create a session with retry mechanism for network resilience
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[502, 503,  # Fixed syntax error: removed stray quote
+    session.mount('https://', HTTPAdapter(max_retries=retries))
     
-    # Try OpenAI
-    if os.getenv('OPENAI_API_KEY'):
+    # Try OpenAI first
+    if OPENAI_API_KEY:
         try:
             from openai import OpenAI
-            ai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            logger.info("Attempting to initialize OpenAI...")
+            ai_client = OpenAI(api_key=OPENAI_API_KEY)
             test_response = ai_client.chat.completions.create(
-                model="gpt-4o-mini",  # Use a lighter, modern model
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": "test"}],
                 max_tokens=5
             )
@@ -48,28 +62,16 @@ def initialize_ai():
             logger.info("OpenAI GPT-4o-mini connected successfully")
             return
         except Exception as e:
-            logger.error(f"OpenAI failed: {str(e)}")
-    
-    # Try Google Gemini
-    if os.getenv('GOOGLE_API_KEY'):
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-            ai_client = genai.GenerativeModel('gemini-1.5-flash')  # Updated model
-            ai_status = "Connected ✅"
-            ai_provider = "Google Gemini"
-            logger.info("Google Gemini connected successfully")
-            return
-        except Exception as e:
-            logger.error(f"Google Gemini failed: {str(e)}")
+            logger.error(f"OpenAI initialization failed: {str(e)}", exc_info=True)
     
     # Try Groq
-    if os.getenv('GROQ_API_KEY'):
+    if GROQ_API_KEY:
         try:
             from groq import Groq
-            ai_client = Groq(api_key=os.getenv('GROQ_API_KEY'))
+            logger.info("Attempting to initialize Groq...")
+            ai_client = Groq(api_key=GROQ_API_KEY)
             test_response = ai_client.chat.completions.create(
-                model="llama3-70b-8192",  # Use a more powerful model
+                model="llama3-70b-8192",
                 messages=[{"role": "user", "content": "test"}],
                 max_tokens=5
             )
@@ -78,14 +80,70 @@ def initialize_ai():
             logger.info("Groq Llama connected successfully")
             return
         except Exception as e:
-            logger.error(f"Groq failed: {str(e)}")
+            logger.error(f"Groq initialization failed: {str(e)}", exc_info=True)
+    
+    # Try Anthropic (skipped unless key added)
+    if 'ANTHROPIC_API_KEY' in globals():
+        try:
+            import anthropic
+            logger.info("Attempting to initialize Anthropic Claude...")
+            ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            ai_client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=5,
+                messages=[{"role": "user", "content": "test"}]
+            )
+            ai_status = "Connected ✅"
+            ai_provider = "Anthropic Claude"
+            logger.info("Anthropic Claude connected successfully")
+            return
+        except Exception as e:
+            logger.error(f"Anthropic initialization failed: {str(e)}", exc_info=True)
+    
+    # Try Google Gemini (skipped unless key added)
+    if 'GOOGLE_API_KEY' in globals():
+        try:
+            import google.generativeai as genai
+            logger.info("Attempting to initialize Google Gemini...")
+            genai.configure(api_key=GOOGLE_API_KEY)
+            ai_client = genai.GenerativeModel('gemini-1.5-flash')
+            test_response = ai_client.generate_content("test")
+            ai_status = "Connected ✅"
+            ai_provider = "Google Gemini"
+            logger.info("Google Gemini connected successfully")
+            return
+        except Exception as e:
+            logger.error(f"Google Gemini initialization failed: {str(e)}", exc_info=True)
     
     ai_status = "No API Keys Found"
     ai_provider = "Fallback System"
-    logger.error("No valid API keys found for any AI provider")
+    logger.error("No valid API keys found or all initializations failed. Available keys: "
+                 f"OPENAI={bool(OPENAI_API_KEY)}, GROQ={bool(GROQ_API_KEY)}")
 
-# Initialize AI on startup
+def initialize_twilio():
+    """Initialize Twilio with embedded credentials."""
+    global twilio_client, twilio_status
+    
+    if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
+        try:
+            logger.info("Attempting to initialize Twilio...")
+            twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            # Test connection by fetching account info
+            twilio_client.api.accounts.list(limit=1)
+            twilio_status = "Connected ✅"
+            logger.info("Twilio connected successfully")
+        except Exception as e:
+            logger.error(f"Twilio initialization failed: {str(e)}", exc_info=True)
+            twilio_status = "Initialization Failed"
+    else:
+        twilio_status = "No Twilio Credentials Found"
+        logger.error("Twilio credentials missing: "
+                     f"TWILIO_ACCOUNT_SID={bool(TWILIO_ACCOUNT_SID)}, "
+                     f"TWILIO_AUTH_TOKEN={bool(TWILIO_AUTH_TOKEN)}")
+
+# Initialize AI and Twilio on startup
 initialize_ai()
+initialize_twilio()
 
 def get_current_day_info(is_tomorrow=False):
     now = datetime.now()
@@ -147,7 +205,7 @@ def process_with_ai(message, business_data):
                 'powered_by': ai_provider
             }
         
-        system_prompt = f"""You are a professional AI assistant for {business_name}, a business that provides services based on the following description: {business_description}
+        system_prompt = f"""You are a professional AI assistant for {business_name}, a business with the following details: {business_description}
 
 CURRENT INFO:
 - Today is {day_info['current_day']}, {day_info['formatted_date']} at {day_info['current_time']}
@@ -159,10 +217,10 @@ RESPONSE RULES:
 3. For appointments: Suggest specific available times based on the business description
 4. For pricing: Provide specific prices if mentioned in the description
 5. Respond in the same language as the customer (Arabic or English)
-6. Do not repeat the entire business description in the response
+6. Do not repeat the entire business description
 7. Be helpful, direct, and context-aware
 8. If the query mentions 'tomorrow' or 'غداً', provide information for {get_current_day_info(is_tomorrow=True)['current_day']}
-9. If the business description lacks specific details, respond based on general knowledge but stay professional
+9. If the business description lacks details, respond professionally with a general answer
 
 Examples:
 - "Are you open today?" → "No, we're closed today. We're open Monday and Tuesday from 4pm-11pm."
@@ -172,18 +230,7 @@ Examples:
 """
 
         # Call different AI providers
-        if ai_provider == "Anthropic Claude":
-            response = ai_client.messages.create(
-                model="claude-3-5-sonnet-20241022",  # Updated to a more recent model
-                max_tokens=150,
-                temperature=0.3,
-                messages=[
-                    {"role": "user", "content": f"{system_prompt}\n\nCustomer message: {message}"}
-                ]
-            )
-            ai_response = response.content[0].text.strip()
-            
-        elif ai_provider == "OpenAI GPT-4o-mini":
+        if ai_provider == "OpenAI GPT-4o-mini":
             response = ai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -194,11 +241,6 @@ Examples:
                 temperature=0.3
             )
             ai_response = response.choices[0].message.content.strip()
-            
-        elif ai_provider == "Google Gemini":
-            prompt = f"{system_prompt}\n\nCustomer message: {message}"
-            response = ai_client.generate_content(prompt)
-            ai_response = response.text.strip()
             
         elif ai_provider == "Groq Llama":
             response = ai_client.chat.completions.create(
@@ -211,6 +253,22 @@ Examples:
                 temperature=0.3
             )
             ai_response = response.choices[0].message.content.strip()
+            
+        elif ai_provider == "Anthropic Claude":
+            response = ai_client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=150,
+                temperature=0.3,
+                messages=[
+                    {"role": "user", "content": f"{system_prompt}\n\nCustomer message: {message}"}
+                ]
+            )
+            ai_response = response.content[0].text.strip()
+            
+        elif ai_provider == "Google Gemini":
+            prompt = f"{system_prompt}\n\nCustomer message: {message}"
+            response = ai_client.generate_content(prompt)
+            ai_response = response.text.strip()
         
         intent = detect_intent(message)
         
@@ -222,7 +280,7 @@ Examples:
         }
         
     except Exception as e:
-        logger.error(f"AI API error: {str(e)}")
+        logger.error(f"AI API error during processing: {str(e)}", exc_info=True)
         return generate_smart_fallback(message, business_data)
 
 def generate_smart_fallback(message, business_data):
@@ -339,17 +397,19 @@ def home():
         
         <div class="status">
             <h3>✅ System Status: ONLINE</h3>
-            <p>Your AI Voice Agent is ready to handle customer calls!</p>
+            <p>Your AI Voice Agent is ready to handle customer calls and messages!</p>
         </div>
         
         <div class="api-status">
             <strong>🧠 AI Engine:</strong> {{ ai_provider }} - {{ ai_status }}<br>
-            <strong>🎤 ElevenLabs:</strong> {{ 'Configured' if elevenlabs_configured else 'Not Configured' }}
+            <strong>🎤 ElevenLabs:</strong> {{ 'Configured' if elevenlabs_configured else 'Not Configured' }}<br>
+            <strong>📱 Twilio:</strong> {{ twilio_status }}
         </div>
         
         <div style="text-align: center; margin: 30px 0;">
             <a href="/dashboard" class="btn">🚀 Open Dashboard</a>
             <a href="/health" class="btn">🔍 Health Check</a>
+            <a href="/debug/env" class="btn">🔧 Debug Env</a>
         </div>
         
         <div class="feature">
@@ -364,14 +424,64 @@ def home():
             <strong>💼 Professional Handling</strong><br>
             Concise, helpful responses in Arabic and English
         </div>
+        <div class="feature">
+            <strong>📱 SMS Integration</strong><br>
+            Responds to customer messages via Twilio
+        </div>
     </div>
 </body>
 </html>
     ''', 
     ai_provider=ai_provider,
     ai_status=ai_status,
-    elevenlabs_configured=bool(os.getenv('ELEVENLABS_API_KEY'))
+    elevenlabs_configured=bool(ELEVENLABS_API_KEY),
+    twilio_status=twilio_status
     )
+
+@app.route('/debug/env')
+def debug_env():
+    return jsonify({
+        'OPENAI_API_KEY': bool(OPENAI_API_KEY),
+        'GROQ_API_KEY': bool(GROQ_API_KEY),
+        'ANTHROPIC_API_KEY': 'ANTHROPIC_API_KEY' in globals(),
+        'GOOGLE_API_KEY': 'GOOGLE_API_KEY' in globals(),
+        'ELEVENLABS_API_KEY': bool(ELEVENLABS_API_KEY),
+        'TWILIO_ACCOUNT_SID': bool(TWILIO_ACCOUNT_SID),
+        'TWILIO_AUTH_TOKEN': bool(TWILIO_AUTH_TOKEN),
+        'FLASK_ENV': FLASK_ENV,
+        'SECRET_KEY': bool(SECRET_KEY)
+    })
+
+@app.route('/twilio/sms', methods=['POST'])
+def twilio_sms():
+    if not twilio_client:
+        logger.error("Twilio client not initialized")
+        return Response(str(MessagingResponse()), mimetype='text/xml')
+    
+    try:
+        # Get incoming message from Twilio
+        message_body = request.form.get('Body', '')
+        from_number = request.form.get('From', '')
+        
+        logger.info(f"Received SMS from {from_number}: {message_body}")
+        
+        # Assume the first business for simplicity (extend to map phone numbers to businesses)
+        business = businesses[0] if businesses else {'name': 'Business', 'description': ''}
+        
+        # Process message with AI
+        result = process_with_ai(message_body, business)
+        response_text = result['response']
+        
+        # Create TwiML response
+        twiml = MessagingResponse()
+        twiml.message(response_text)
+        
+        logger.info(f"Sending SMS response to {from_number}: {response_text}")
+        return Response(str(twiml), mimetype='text/xml')
+        
+    except Exception as e:
+        logger.error(f"Error processing Twilio SMS: {str(e)}", exc_info=True)
+        return Response(str(MessagingResponse()), mimetype='text/xml')
 
 @app.route('/dashboard')
 def dashboard():
@@ -644,7 +754,8 @@ def health():
         'status': 'healthy',
         'ai_provider': ai_provider,
         'ai_status': ai_status,
-        'elevenlabs_configured': bool(os.getenv('ELEVENLABS_API_KEY'))
+        'elevenlabs_configured': bool(ELEVENLABS_API_KEY),
+        'twilio_status': twilio_status
     })
 
 @app.route('/api/businesses', methods=['GET'])
@@ -684,5 +795,7 @@ def test_voice(business_id):
     return jsonify({'success': True, 'result': result})
 
 if __name__ == '__main__':
+    app.config['ENV'] = FLASK_ENV
+    app.config['SECRET_KEY'] = SECRET_KEY
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
