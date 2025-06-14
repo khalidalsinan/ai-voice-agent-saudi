@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify, render_template_string
-from src.models.voice_models import Business, Service, Customer, Appointment, CallLog, Conversation
+from src.models.voice_models import Business, Service, Customer, Appointment, CallLog
 from src.services.voice_service import VoiceService
 from src.models.user import db
 import os
