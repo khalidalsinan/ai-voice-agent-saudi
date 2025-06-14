@@ -4,7 +4,7 @@ from flask_cors import CORS
 from datetime import datetime
 import logging
 
-app = Flask(__name__)
+app = Flask(__name__ )
 CORS(app)
 
 logging.basicConfig(level=logging.INFO)
@@ -13,29 +13,74 @@ logger = logging.getLogger(__name__)
 businesses = []
 business_counter = 1
 
-# Initialize OpenAI client with better error handling
-openai_client = None
-openai_status = "Not Configured"
+# Initialize AI clients
+ai_client = None
+ai_status = "Not Configured"
+ai_provider = "None"
 
-try:
-    api_key = os.getenv('OPENAI_API_KEY')
-    if api_key:
-        from openai import OpenAI
-        openai_client = OpenAI(api_key=api_key)
-        # Test the connection
-        test_response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": "test"}],
-            max_tokens=5
-        )
-        openai_status = "Connected ✅"
-        logger.info("OpenAI GPT-4 connected successfully")
-    else:
-        openai_status = "No API Key"
-        logger.warning("No OpenAI API key found")
-except Exception as e:
-    openai_status = f"Error: {str(e)[:50]}"
-    logger.error(f"OpenAI initialization failed: {e}")
+def initialize_ai():
+    global ai_client, ai_status, ai_provider
+    
+    # Try Anthropic Claude first
+    if os.getenv('ANTHROPIC_API_KEY'):
+        try:
+            import anthropic
+            ai_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+            ai_status = "Connected ✅"
+            ai_provider = "Anthropic Claude"
+            logger.info("Anthropic Claude connected successfully")
+            return
+        except Exception as e:
+            logger.error(f"Anthropic failed: {e}")
+    
+    # Try OpenAI
+    if os.getenv('OPENAI_API_KEY'):
+        try:
+            from openai import OpenAI
+            ai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            # Test connection
+            test_response = ai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=5
+            )
+            ai_status = "Connected ✅"
+            ai_provider = "OpenAI GPT-4"
+            logger.info("OpenAI GPT-4 connected successfully")
+            return
+        except Exception as e:
+            logger.error(f"OpenAI failed: {e}")
+    
+    # Try Google Gemini
+    if os.getenv('GOOGLE_API_KEY'):
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+            ai_client = genai.GenerativeModel('gemini-pro')
+            ai_status = "Connected ✅"
+            ai_provider = "Google Gemini"
+            logger.info("Google Gemini connected successfully")
+            return
+        except Exception as e:
+            logger.error(f"Google Gemini failed: {e}")
+    
+    # Try Groq
+    if os.getenv('GROQ_API_KEY'):
+        try:
+            from groq import Groq
+            ai_client = Groq(api_key=os.getenv('GROQ_API_KEY'))
+            ai_status = "Connected ✅"
+            ai_provider = "Groq Llama"
+            logger.info("Groq connected successfully")
+            return
+        except Exception as e:
+            logger.error(f"Groq failed: {e}")
+    
+    ai_status = "No API Keys Found"
+    ai_provider = "Fallback System"
+
+# Initialize AI on startup
+initialize_ai()
 
 def get_current_day_info():
     now = datetime.now()
@@ -49,8 +94,8 @@ def get_current_day_info():
         'formatted_date': now.strftime('%A, %B %d, %Y')
     }
 
-def process_with_gpt(message, business_data):
-    if not openai_client:
+def process_with_ai(message, business_data):
+    if not ai_client:
         return generate_smart_fallback(message, business_data)
     
     try:
@@ -58,27 +103,23 @@ def process_with_gpt(message, business_data):
         business_name = business_data.get('name', 'Business')
         business_description = business_data.get('description', '')
         
-        # Detect if message is off-topic
+        # Check if off-topic
         business_keywords = ['appointment', 'book', 'price', 'cost', 'service', 'open', 'closed', 'hours', 'available', 'موعد', 'حجز', 'سعر', 'خدمة', 'مفتوح', 'مغلق', 'ساعات']
         is_business_related = any(keyword in message.lower() for keyword in business_keywords)
         
         if not is_business_related:
-            # Handle off-topic requests
             is_arabic = any(char in message for char in 'أبتثجحخدذرزسشصضطظعغفقكلمنهوي')
             if is_arabic:
-                return {
-                    'response': f"أنا مساعد ذكي لـ {business_name}. أستطيع مساعدتك في المواعيد والخدمات الطبية فقط. كيف يمكنني مساعدتك؟",
-                    'intent': 'off_topic',
-                    'confidence': 0.9,
-                    'powered_by': 'OpenAI GPT-4'
-                }
+                response = f"أنا مساعد ذكي لـ {business_name}. أستطيع مساعدتك في المواعيد والخدمات الطبية فقط. كيف يمكنني مساعدتك؟"
             else:
-                return {
-                    'response': f"I'm an AI assistant for {business_name}. I can help you with appointments, services, and medical inquiries. How can I assist you today?",
-                    'intent': 'off_topic',
-                    'confidence': 0.9,
-                    'powered_by': 'OpenAI GPT-4'
-                }
+                response = f"I'm an AI assistant for {business_name}. I can help with appointments, services, and medical inquiries. How can I assist you today?"
+            
+            return {
+                'response': response,
+                'intent': 'off_topic',
+                'confidence': 0.9,
+                'powered_by': ai_provider
+            }
         
         system_prompt = f"""You are a professional AI assistant for {business_name}.
 
@@ -102,28 +143,57 @@ Examples:
 - "هل أنتم مفتوحين اليوم؟" → "لا، نحن مغلقون اليوم. نعمل يوم الاثنين والثلاثاء من 4 مساءً إلى 11 مساءً."
 """
 
-        response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message}
-            ],
-            max_tokens=150,
-            temperature=0.3
-        )
+        # Call different AI providers
+        if ai_provider == "Anthropic Claude":
+            response = ai_client.messages.create(
+                model="claude-3-sonnet-20240229",
+                max_tokens=150,
+                messages=[
+                    {"role": "user", "content": f"{system_prompt}\n\nCustomer message: {message}"}
+                ]
+            )
+            ai_response = response.content[0].text.strip()
+            
+        elif ai_provider == "OpenAI GPT-4":
+            response = ai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
+                max_tokens=150,
+                temperature=0.3
+            )
+            ai_response = response.choices[0].message.content.strip()
+            
+        elif ai_provider == "Google Gemini":
+            prompt = f"{system_prompt}\n\nCustomer message: {message}"
+            response = ai_client.generate_content(prompt)
+            ai_response = response.text.strip()
+            
+        elif ai_provider == "Groq Llama":
+            response = ai_client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
+                max_tokens=150,
+                temperature=0.3
+            )
+            ai_response = response.choices[0].message.content.strip()
         
-        ai_response = response.choices[0].message.content.strip()
         intent = detect_intent(message)
         
         return {
             'response': ai_response,
             'intent': intent,
             'confidence': 0.95,
-            'powered_by': 'OpenAI GPT-4'
+            'powered_by': ai_provider
         }
         
     except Exception as e:
-        logger.error(f"OpenAI API error: {e}")
+        logger.error(f"AI API error: {e}")
         return generate_smart_fallback(message, business_data)
 
 def detect_intent(message):
@@ -149,51 +219,18 @@ def generate_smart_fallback(message, business_data):
     
     if intent == 'hours':
         current_day = day_info['current_day'].lower()
-        
-        # Smart parsing of business hours
-        is_open_today = False
-        if 'mon' in business_desc and 'monday' in current_day:
-            is_open_today = True
-        elif 'tue' in business_desc and 'tuesday' in current_day:
-            is_open_today = True
-        elif 'wed' in business_desc and 'wednesday' in current_day:
-            is_open_today = True
-        elif 'thu' in business_desc and 'thursday' in current_day:
-            is_open_today = True
-        elif 'fri' in business_desc and 'friday' in current_day:
-            is_open_today = True
-        elif 'sat' in business_desc and 'saturday' in current_day:
-            is_open_today = True
-        elif 'sun' in business_desc and 'sunday' in current_day:
-            is_open_today = True
+        is_open_today = any(day in business_desc for day in ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] if day in current_day[:3])
         
         if is_arabic:
             if is_open_today:
-                response = f"نعم، نحن مفتوحون اليوم. ساعات العمل حسب الجدول المحدد."
+                response = f"نعم، نحن مفتوحون اليوم. تحقق من ساعات العمل المحددة."
             else:
-                response = f"لا، نحن مغلقون اليوم ({day_info['current_day_arabic']}). تحقق من ساعات العمل المحددة."
+                response = f"لا، نحن مغلقون اليوم ({day_info['current_day_arabic']}). تحقق من جدول العمل."
         else:
             if is_open_today:
                 response = f"Yes, we're open today. Please check our scheduled hours."
             else:
-                response = f"No, we're closed today ({day_info['current_day']}). Please check our operating schedule."
-    
-    elif intent == 'general':
-        # Check if it's off-topic
-        business_keywords = ['appointment', 'book', 'price', 'service', 'open', 'موعد', 'حجز', 'سعر', 'خدمة']
-        is_business_related = any(keyword in message.lower() for keyword in business_keywords)
-        
-        if not is_business_related:
-            if is_arabic:
-                response = f"أنا مساعد ذكي لـ {business_name}. أستطيع مساعدتك في المواعيد والخدمات فقط."
-            else:
-                response = f"I'm an AI assistant for {business_name}. I can help with appointments and services."
-        else:
-            if is_arabic:
-                response = f"مرحباً بك في {business_name}! كيف يمكنني مساعدتك؟"
-            else:
-                response = f"Hello! Welcome to {business_name}. How can I help you?"
-    
+                response = f"No, we're closed today ({day_info['current_day']}). Check our operating schedule."
     else:
         if is_arabic:
             response = f"مرحباً بك في {business_name}! كيف يمكنني مساعدتك؟"
@@ -286,7 +323,7 @@ def home():
         </div>
         
         <div class="api-status">
-            <strong>🧠 OpenAI GPT-4:</strong> {{ openai_status }}<br>
+            <strong>🧠 AI Engine:</strong> {{ ai_provider }} - {{ ai_status }}<br>
             <strong>🎤 ElevenLabs:</strong> {{ 'Configured' if elevenlabs_configured else 'Not Configured' }}
         </div>
         
@@ -297,7 +334,7 @@ def home():
         
         <div class="feature">
             <strong>🎤 Smart Voice Processing</strong><br>
-            Powered by OpenAI GPT-4 for intelligent responses
+            Powered by {{ ai_provider }} for intelligent responses
         </div>
         <div class="feature">
             <strong>📅 Date-Aware Responses</strong><br>
@@ -311,19 +348,282 @@ def home():
 </body>
 </html>
     ''', 
-    openai_status=openai_status,
+    ai_provider=ai_provider,
+    ai_status=ai_status,
     elevenlabs_configured=bool(os.getenv('ELEVENLABS_API_KEY'))
     )
 
 @app.route('/dashboard')
 def dashboard():
-    return "Dashboard coming soon..."
+    return render_template_string('''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Voice Agent Dashboard</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1000px; 
+            margin: 0 auto; 
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        h1 { 
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+        .tabs {
+            display: flex;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 5px;
+            margin-bottom: 30px;
+        }
+        .tab {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: transparent;
+            border: none;
+            color: white;
+            font-size: 16px;
+        }
+        .tab.active {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .tab-content {
+            display: none;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 30px;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            font-size: 16px;
+        }
+        .btn {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .business-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 20px;
+            margin: 15px 0;
+            border-left: 4px solid #4CAF50;
+        }
+        #response-area {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 15px;
+            min-height: 120px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            border-left: 4px solid #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 AI Voice Agent Dashboard</h1>
+        
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('business')">🏢 Business</button>
+            <button class="tab" onclick="showTab('test')">🧠 Test AI</button>
+        </div>
+
+        <div id="business" class="tab-content active">
+            <h3>🏢 Business Management</h3>
+            <div class="form-group">
+                <label>Business Name</label>
+                <input type="text" id="business-name" placeholder="Enter business name">
+            </div>
+            <div class="form-group">
+                <label>Business Description (AI Training Data)</label>
+                <textarea id="business-description" rows="6" placeholder="Example: Alsinan Family Medical Clinic - Open Monday & Tuesday 4PM-11PM. Services: General consultation (150 SAR), Lab tests (80 SAR). Located in Qatif. Accepts insurance."></textarea>
+            </div>
+            <button class="btn" onclick="createBusiness()">Create Business</button>
+            
+            <div style="margin-top: 30px;">
+                <h4>📋 Your Businesses</h4>
+                <div id="business-list">
+                    <p>Loading businesses...</p>
+                </div>
+            </div>
+        </div>
+
+        <div id="test" class="tab-content">
+            <h3>🧠 Test AI Intelligence</h3>
+            <div class="form-group">
+                <label>Select Business</label>
+                <select id="test-business">
+                    <option value="">Select a business...</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Test Message (Arabic or English)</label>
+                <input type="text" id="test-message" placeholder="Try: 'Are you open today?' or 'هل أنتم مفتوحين اليوم؟'">
+            </div>
+            <button class="btn" onclick="testVoice()">🧠 Test AI Response</button>
+            <div id="response-area">AI responses will appear here...</div>
+        </div>
+    </div>
+
+    <script>
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+            
+            loadBusinesses();
+        }
+
+        function loadBusinesses() {
+            fetch('/api/businesses')
+                .then(response => response.json())
+                .then(data => {
+                    const businessList = document.getElementById('business-list');
+                    const testSelect = document.getElementById('test-business');
+                    
+                    if (data.businesses && data.businesses.length > 0) {
+                        businessList.innerHTML = data.businesses.map(b => `
+                            <div class="business-card">
+                                <h4>${b.name}</h4>
+                                <p><strong>AI Training Data:</strong> ${b.description || 'No description'}</p>
+                                <small>Business ID: ${b.id}</small>
+                            </div>
+                        `).join('');
+                        
+                        testSelect.innerHTML = '<option value="">Select a business...</option>' +
+                            data.businesses.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+                    } else {
+                        businessList.innerHTML = '<p>No businesses created yet.</p>';
+                        testSelect.innerHTML = '<option value="">No businesses available</option>';
+                    }
+                });
+        }
+
+        function createBusiness() {
+            const name = document.getElementById('business-name').value;
+            const description = document.getElementById('business-description').value;
+            
+            if (!name) {
+                alert('Please enter a business name');
+                return;
+            }
+            
+            fetch('/api/businesses', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, description })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Business created successfully!');
+                    document.getElementById('business-name').value = '';
+                    document.getElementById('business-description').value = '';
+                    loadBusinesses();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            });
+        }
+
+        function testVoice() {
+            const businessId = document.getElementById('test-business').value;
+            const message = document.getElementById('test-message').value;
+            
+            if (!businessId || !message) {
+                alert('Please select a business and enter a message');
+                return;
+            }
+            
+            const responseArea = document.getElementById('response-area');
+            responseArea.textContent = '🧠 AI is thinking...';
+            
+            fetch(`/api/businesses/${businessId}/test-voice`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    responseArea.innerHTML = `
+<strong>🤖 AI Response:</strong>
+${data.result.response}
+
+<strong>📊 Analysis:</strong>
+Intent: ${data.result.intent}
+Confidence: ${(data.result.confidence * 100).toFixed(0)}%
+Powered by: ${data.result.powered_by}
+                    `;
+                } else {
+                    responseArea.textContent = `❌ Error: ${data.error}`;
+                }
+            });
+        }
+
+        loadBusinesses();
+    </script>
+</body>
+</html>
+    ''')
 
 @app.route('/health')
 def health():
     return jsonify({
         'status': 'healthy',
-        'openai_status': openai_status,
+        'ai_provider': ai_provider,
+        'ai_status': ai_status,
         'elevenlabs_configured': bool(os.getenv('ELEVENLABS_API_KEY'))
     })
 
@@ -360,7 +660,7 @@ def test_voice(business_id):
     if not business:
         return jsonify({'success': False, 'error': 'Business not found'}), 404
     
-    result = process_with_gpt(message, business)
+    result = process_with_ai(message, business)
     return jsonify({'success': True, 'result': result})
 
 if __name__ == '__main__':
