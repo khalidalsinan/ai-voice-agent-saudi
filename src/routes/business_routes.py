@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from src.models.voice_models import Business, Service, Customer, Appointment, CallLog
+from src.models.voice_models import Business
 from src.services.voice_service import VoiceService
 from src.models.user import db
 import os
@@ -7,7 +7,6 @@ from datetime import datetime
 
 business_bp = Blueprint('business', __name__)
 
-# Initialize voice service
 voice_service = VoiceService(
     openai_api_key=os.getenv('OPENAI_API_KEY'),
     elevenlabs_api_key=os.getenv('ELEVENLABS_API_KEY')
@@ -15,7 +14,6 @@ voice_service = VoiceService(
 
 @business_bp.route('/businesses', methods=['GET'])
 def get_businesses():
-    """Get all businesses."""
     try:
         businesses = Business.query.all()
         return jsonify({
@@ -35,7 +33,6 @@ def get_businesses():
 
 @business_bp.route('/businesses', methods=['POST'])
 def create_business():
-    """Create a new business."""
     try:
         data = request.get_json()
         
@@ -63,8 +60,7 @@ def create_business():
                 'phone': business.phone,
                 'email': business.email,
                 'description': business.description,
-                'hours': business.hours,
-                'created_at': business.created_at.isoformat()
+                'hours': business.hours
             }
         })
         
@@ -72,29 +68,8 @@ def create_business():
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@business_bp.route('/businesses/<int:business_id>', methods=['GET'])
-def get_business(business_id):
-    """Get a specific business by ID."""
-    try:
-        business = Business.query.get_or_404(business_id)
-        return jsonify({
-            'success': True,
-            'business': {
-                'id': business.id,
-                'name': business.name,
-                'phone': business.phone,
-                'email': business.email,
-                'description': business.description,
-                'hours': business.hours,
-                'created_at': business.created_at.isoformat() if business.created_at else None
-            }
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
 @business_bp.route('/businesses/<int:business_id>', methods=['PUT'])
 def update_business(business_id):
-    """Update a business - THIS IS THE NEW EDITING FEATURE!"""
     try:
         business = Business.query.get_or_404(business_id)
         data = request.get_json()
@@ -102,7 +77,6 @@ def update_business(business_id):
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
         
-        # Update business fields
         if 'name' in data:
             business.name = data['name']
         if 'phone' in data:
@@ -118,32 +92,7 @@ def update_business(business_id):
         
         return jsonify({
             'success': True,
-            'message': 'Business updated successfully',
-            'business': {
-                'id': business.id,
-                'name': business.name,
-                'phone': business.phone,
-                'email': business.email,
-                'description': business.description,
-                'hours': business.hours
-            }
-        })
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@business_bp.route('/businesses/<int:business_id>', methods=['DELETE'])
-def delete_business(business_id):
-    """Delete a business."""
-    try:
-        business = Business.query.get_or_404(business_id)
-        db.session.delete(business)
-        db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'message': 'Business deleted successfully'
+            'message': 'Business updated successfully'
         })
         
     except Exception as e:
@@ -152,7 +101,6 @@ def delete_business(business_id):
 
 @business_bp.route('/businesses/<int:business_id>/test-voice', methods=['POST'])
 def test_voice_processing(business_id):
-    """Test voice processing for a specific business."""
     try:
         business = Business.query.get_or_404(business_id)
         data = request.get_json()
@@ -160,7 +108,6 @@ def test_voice_processing(business_id):
         if not data or not data.get('message'):
             return jsonify({'success': False, 'error': 'Message is required'}), 400
         
-        # Prepare business data for voice service
         business_data = {
             'id': business.id,
             'name': business.name,
@@ -170,7 +117,6 @@ def test_voice_processing(business_id):
             'email': business.email
         }
         
-        # Process the message
         result = voice_service.process_message(
             message=data['message'],
             business_data=business_data,
