@@ -1,13 +1,151 @@
 import os
 from flask import Flask, jsonify, request, render_template_string
 from flask_cors import CORS
+from datetime import datetime
+import logging
 
 app = Flask(__name__)
 CORS(app)
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Simple in-memory storage
 businesses = []
 business_counter = 1
+
+# Initialize OpenAI client
+openai_client = None
+if os.getenv('OPENAI_API_KEY'):
+    try:
+        from openai import OpenAI
+        openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        logger.info("OpenAI client initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize OpenAI: {e}")
+
+def get_current_day_info():
+    """Get current day and time information for Saudi Arabia"""
+    now = datetime.now()
+    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    arabic_days = ['الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت', 'الأحد']
+    
+    current_day = days[now.weekday()]
+    current_day_arabic = arabic_days[now.weekday()]
+    current_time = now.strftime('%I:%M %p')
+    
+    return {
+        'current_day': current_day,
+        'current_day_arabic': current_day_arabic,
+        'current_time': current_time,
+        'current_date': now.strftime('%Y-%m-%d'),
+        'formatted_date': now.strftime('%A, %B %d, %Y')
+    }
+
+def process_with_gpt(message, business_data):
+    """Process message with real OpenAI GPT"""
+    if not openai_client:
+        return generate_fallback_response(message, business_data)
+    
+    try:
+        day_info = get_current_day_info()
+        business_name = business_data.get('name', 'Business')
+        business_description = business_data.get('description', '')
+        
+        # Create intelligent system prompt
+        system_prompt = f"""You are a professional AI assistant for {business_name}, a business in Saudi Arabia.
+
+CURRENT DATE & TIME:
+- Today is {day_info['formatted_date']} ({day_info['current_day']})
+- Current time: {day_info['current_time']}
+
+BUSINESS INFORMATION:
+{business_description}
+
+INSTRUCTIONS:
+- Respond in the same language the customer uses (Arabic or English)
+- Be professional, helpful, and concise
+- When asked about "today" or current day, refer to {day_info['current_day']}
+- Check business hours against the current day and time
+- For appointment requests, suggest specific available times
+- Provide accurate information based on the business description
+- If business hours are mentioned in description, use them to answer availability questions
+- Be natural and conversational, not robotic"""
+
+        # Send to OpenAI
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message}
+            ],
+            max_tokens=200,
+            temperature=0.7
+        )
+        
+        ai_response = response.choices[0].message.content.strip()
+        
+        # Detect intent
+        intent = detect_intent(message)
+        
+        return {
+            'response': ai_response,
+            'intent': intent,
+            'confidence': 0.9,
+            'powered_by': 'OpenAI GPT-4'
+        }
+        
+    except Exception as e:
+        logger.error(f"OpenAI API error: {e}")
+        return generate_fallback_response(message, business_data)
+
+def detect_intent(message):
+    """Detect customer intent"""
+    message_lower = message.lower()
+    
+    if any(word in message_lower for word in ['book', 'appointment', 'schedule', 'موعد', 'حجز', 'احجز']):
+        return 'booking'
+    elif any(word in message_lower for word in ['price', 'cost', 'سعر', 'كم', 'تكلفة']):
+        return 'pricing'
+    elif any(word in message_lower for word in ['hours', 'open', 'closed', 'today', 'ساعات', 'مفتوح', 'مغلق', 'اليوم']):
+        return 'hours'
+    elif any(word in message_lower for word in ['service', 'offer', 'خدمات', 'تقدمون']):
+        return 'services'
+    else:
+        return 'general'
+
+def generate_fallback_response(message, business_data):
+    """Fallback response when OpenAI is not available"""
+    day_info = get_current_day_info()
+    business_name = business_data.get('name', 'Business')
+    business_desc = business_data.get('description', '')
+    
+    is_arabic = any(char in message for char in 'أبتثجحخدذرزسشصضطظعغفقكلمنهوي')
+    intent = detect_intent(message)
+    
+    if intent == 'hours':
+        if is_arabic:
+            response = f"اليوم هو {day_info['current_day_arabic']} والوقت الحالي {day_info['current_time']}. بناءً على معلومات {business_name}: {business_desc}"
+        else:
+            response = f"Today is {day_info['current_day']} and it's currently {day_info['current_time']}. Based on {business_name}'s schedule: {business_desc}"
+    elif intent == 'booking':
+        if is_arabic:
+            response = f"يمكنني مساعدتك في حجز موعد في {business_name}. اليوم هو {day_info['current_day_arabic']}. {business_desc}"
+        else:
+            response = f"I can help you book an appointment at {business_name}. Today is {day_info['current_day']}. {business_desc}"
+    else:
+        if is_arabic:
+            response = f"مرحباً بك في {business_name}! كيف يمكنني مساعدتك؟"
+        else:
+            response = f"Hello! Welcome to {business_name}. How can I help you?"
+    
+    return {
+        'response': response,
+        'intent': intent,
+        'confidence': 0.6,
+        'powered_by': 'Fallback System'
+    }
 
 @app.route('/')
 def home():
@@ -142,12 +280,23 @@ def home():
         .status-ok { background: #4CAF50; }
         .status-error { background: #f44336; }
         #response-area {
-            background: rgba(0, 0, 0, 0.2);
+            background: rgba(0, 0, 0, 0.3);
             border-radius: 8px;
-            padding: 15px;
+            padding: 20px;
             margin-top: 15px;
-            min-height: 100px;
+            min-height: 120px;
             white-space: pre-wrap;
+            font-family: monospace;
+            border-left: 4px solid #4CAF50;
+        }
+        .ai-badge {
+            background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
         }
     </style>
 </head>
@@ -155,12 +304,12 @@ def home():
     <div class="container">
         <div class="header">
             <h1>🤖 AI Voice Agent System</h1>
-            <p>Professional voice AI for Saudi businesses</p>
+            <p>Powered by OpenAI GPT-4 <span class="ai-badge">SMART AI</span></p>
         </div>
 
         <div class="status-card">
             <h3>✅ System Status: ONLINE</h3>
-            <p>Your AI Voice Agent is ready to handle customer calls in Arabic and English!</p>
+            <p>Your AI Voice Agent is ready with intelligent responses!</p>
             <div class="api-status">
                 <div class="api-card">
                     <span class="status-indicator status-ok"></span>
@@ -168,37 +317,29 @@ def home():
                 </div>
                 <div class="api-card">
                     <span class="status-indicator {{ 'status-ok' if openai_configured else 'status-error' }}"></span>
-                    <strong>OpenAI</strong><br>{{ 'Configured' if openai_configured else 'Not Configured' }}
+                    <strong>OpenAI GPT-4</strong><br>{{ 'Connected' if openai_configured else 'Not Configured' }}
                 </div>
                 <div class="api-card">
                     <span class="status-indicator {{ 'status-ok' if elevenlabs_configured else 'status-error' }}"></span>
-                    <strong>ElevenLabs</strong><br>{{ 'Configured' if elevenlabs_configured else 'Not Configured' }}
+                    <strong>ElevenLabs</strong><br>{{ 'Connected' if elevenlabs_configured else 'Not Configured' }}
                 </div>
             </div>
         </div>
 
         <div class="tabs">
-            <button class="tab active" onclick="showTab('overview')">📊 Overview</button>
-            <button class="tab" onclick="showTab('business')">🏢 Business</button>
-            <button class="tab" onclick="showTab('test')">🎤 Test Voice</button>
+            <button class="tab active" onclick="showTab('business')">🏢 Business</button>
+            <button class="tab" onclick="showTab('test')">🧠 Test AI</button>
         </div>
 
-        <div id="overview" class="tab-content active">
-            <h3>📈 Dashboard Overview</h3>
-            <div class="business-list" id="business-overview">
-                <p>Loading businesses...</p>
-            </div>
-        </div>
-
-        <div id="business" class="tab-content">
+        <div id="business" class="tab-content active">
             <h3>🏢 Business Management</h3>
             <div class="form-group">
                 <label>Business Name</label>
                 <input type="text" id="business-name" placeholder="Enter business name">
             </div>
             <div class="form-group">
-                <label>Description (for AI training)</label>
-                <textarea id="business-description" rows="4" placeholder="Describe your business, services, hours, pricing..."></textarea>
+                <label>Business Description (AI Training Data)</label>
+                <textarea id="business-description" rows="6" placeholder="Example: Alsinan Family Medical Clinic - Open Monday & Thursday 4PM-11PM. Services: General consultation (150 SAR), Lab tests (80 SAR), Specialist consultations (200 SAR). Located in Riyadh. Accepts insurance."></textarea>
             </div>
             <button class="btn" onclick="createBusiness()">Create Business</button>
             
@@ -211,7 +352,7 @@ def home():
         </div>
 
         <div id="test" class="tab-content">
-            <h3>🎤 Test Voice Processing</h3>
+            <h3>🧠 Test AI Intelligence</h3>
             <div class="form-group">
                 <label>Select Business</label>
                 <select id="test-business">
@@ -219,17 +360,16 @@ def home():
                 </select>
             </div>
             <div class="form-group">
-                <label>Test Message</label>
-                <input type="text" id="test-message" placeholder="Type your message in Arabic or English">
+                <label>Test Message (Arabic or English)</label>
+                <input type="text" id="test-message" placeholder="Try: 'Are you open today?' or 'هل أنتم مفتوحين اليوم؟'">
             </div>
-            <button class="btn" onclick="testVoice()">Test AI Response</button>
-            <div id="response-area"></div>
+            <button class="btn" onclick="testVoice()">🧠 Test AI Response</button>
+            <div id="response-area">AI responses will appear here...</div>
         </div>
     </div>
 
     <script>
         function showTab(tabName) {
-            // Hide all tabs
             document.querySelectorAll('.tab-content').forEach(tab => {
                 tab.classList.remove('active');
             });
@@ -237,11 +377,10 @@ def home():
                 tab.classList.remove('active');
             });
             
-            // Show selected tab
             document.getElementById(tabName).classList.add('active');
             event.target.classList.add('active');
             
-            if (tabName === 'overview' || tabName === 'business' || tabName === 'test') {
+            if (tabName === 'business' || tabName === 'test') {
                 loadBusinesses();
             }
         }
@@ -251,33 +390,21 @@ def home():
                 .then(response => response.json())
                 .then(data => {
                     const businessList = document.getElementById('business-list');
-                    const businessOverview = document.getElementById('business-overview');
                     const testSelect = document.getElementById('test-business');
                     
                     if (data.businesses && data.businesses.length > 0) {
-                        // Update business list
                         businessList.innerHTML = data.businesses.map(b => `
                             <div class="business-card">
                                 <h4>${b.name}</h4>
-                                <p>${b.description || 'No description'}</p>
-                                <small>ID: ${b.id}</small>
+                                <p><strong>AI Training Data:</strong> ${b.description || 'No description'}</p>
+                                <small>Business ID: ${b.id}</small>
                             </div>
                         `).join('');
                         
-                        // Update overview
-                        businessOverview.innerHTML = `
-                            <div class="business-card">
-                                <h4>📊 Total Businesses: ${data.businesses.length}</h4>
-                                <p>Your AI voice agents are ready to serve customers!</p>
-                            </div>
-                        `;
-                        
-                        // Update test select
                         testSelect.innerHTML = '<option value="">Select a business...</option>' +
                             data.businesses.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
                     } else {
                         businessList.innerHTML = '<p>No businesses created yet.</p>';
-                        businessOverview.innerHTML = '<p>Create your first business to get started!</p>';
                         testSelect.innerHTML = '<option value="">No businesses available</option>';
                     }
                 });
@@ -319,6 +446,9 @@ def home():
                 return;
             }
             
+            const responseArea = document.getElementById('response-area');
+            responseArea.textContent = '🧠 AI is thinking...';
+            
             fetch(`/api/businesses/${businessId}/test-voice`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -326,16 +456,22 @@ def home():
             })
             .then(response => response.json())
             .then(data => {
-                const responseArea = document.getElementById('response-area');
                 if (data.success) {
-                    responseArea.textContent = `AI Response: ${data.result.response}\\n\\nIntent: ${data.result.intent}`;
+                    responseArea.innerHTML = `
+<strong>🤖 AI Response:</strong>
+${data.result.response}
+
+<strong>📊 Analysis:</strong>
+Intent: ${data.result.intent}
+Confidence: ${(data.result.confidence * 100).toFixed(0)}%
+Powered by: ${data.result.powered_by}
+                    `;
                 } else {
-                    responseArea.textContent = `Error: ${data.error}`;
+                    responseArea.textContent = `❌ Error: ${data.error}`;
                 }
             });
         }
 
-        // Load businesses on page load
         loadBusinesses();
     </script>
 </body>
@@ -349,9 +485,10 @@ def home():
 def health():
     return jsonify({
         'status': 'healthy',
-        'message': 'AI Voice Agent is working!',
+        'message': 'AI Voice Agent with GPT-4 is working!',
         'openai_configured': bool(os.getenv('OPENAI_API_KEY')),
-        'elevenlabs_configured': bool(os.getenv('ELEVENLABS_API_KEY'))
+        'elevenlabs_configured': bool(os.getenv('ELEVENLABS_API_KEY')),
+        'ai_engine': 'OpenAI GPT-4' if openai_client else 'Fallback System'
     })
 
 @app.route('/api/businesses', methods=['GET'])
@@ -395,33 +532,12 @@ def test_voice(business_id):
     if not business:
         return jsonify({'success': False, 'error': 'Business not found'}), 404
     
-    # Enhanced response based on business description
-    is_arabic = any(char in message for char in 'أبتثجحخدذرزسشصضطظعغفقكلمنهوي')
-    business_name = business['name']
-    business_desc = business.get('description', '')
-    
-    if is_arabic:
-        if 'موعد' in message or 'حجز' in message:
-            response = f"مرحباً بك في {business_name}! يمكنني مساعدتك في حجز موعد. متى تفضل الحضور؟"
-        elif 'سعر' in message or 'كم' in message:
-            response = f"أسعارنا في {business_name} تنافسية جداً. {business_desc[:100]}... هل تريد معرفة سعر خدمة معينة؟"
-        else:
-            response = f"مرحباً بك في {business_name}! {business_desc[:100]}... كيف يمكنني مساعدتك؟"
-    else:
-        if 'appointment' in message.lower() or 'book' in message.lower():
-            response = f"Hello! Welcome to {business_name}. I can help you book an appointment. When would you like to visit?"
-        elif 'price' in message.lower() or 'cost' in message.lower():
-            response = f"Our prices at {business_name} are very competitive. {business_desc[:100]}... What specific service are you interested in?"
-        else:
-            response = f"Hello! Welcome to {business_name}. {business_desc[:100]}... How can I help you today?"
+    # Process with real GPT
+    result = process_with_gpt(message, business)
     
     return jsonify({
         'success': True,
-        'result': {
-            'response': response,
-            'intent': 'general',
-            'business_name': business_name
-        }
+        'result': result
     })
 
 if __name__ == '__main__':
