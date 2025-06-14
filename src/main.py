@@ -1,10 +1,10 @@
 import os
 from flask import Flask, jsonify, request, render_template_string
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
-app = Flask(__name__ )
+app = Flask(__name__)
 CORS(app)
 
 logging.basicConfig(level=logging.INFO)
@@ -31,59 +31,66 @@ def initialize_ai():
             logger.info("Anthropic Claude connected successfully")
             return
         except Exception as e:
-            logger.error(f"Anthropic failed: {e}")
+            logger.error(f"Anthropic failed: {str(e)}")
     
     # Try OpenAI
     if os.getenv('OPENAI_API_KEY'):
         try:
             from openai import OpenAI
             ai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-            # Test connection
             test_response = ai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o-mini",  # Use a lighter, modern model
                 messages=[{"role": "user", "content": "test"}],
                 max_tokens=5
             )
             ai_status = "Connected ✅"
-            ai_provider = "OpenAI GPT-4"
-            logger.info("OpenAI GPT-4 connected successfully")
+            ai_provider = "OpenAI GPT-4o-mini"
+            logger.info("OpenAI GPT-4o-mini connected successfully")
             return
         except Exception as e:
-            logger.error(f"OpenAI failed: {e}")
+            logger.error(f"OpenAI failed: {str(e)}")
     
     # Try Google Gemini
     if os.getenv('GOOGLE_API_KEY'):
         try:
             import google.generativeai as genai
             genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-            ai_client = genai.GenerativeModel('gemini-pro')
+            ai_client = genai.GenerativeModel('gemini-1.5-flash')  # Updated model
             ai_status = "Connected ✅"
             ai_provider = "Google Gemini"
             logger.info("Google Gemini connected successfully")
             return
         except Exception as e:
-            logger.error(f"Google Gemini failed: {e}")
+            logger.error(f"Google Gemini failed: {str(e)}")
     
     # Try Groq
     if os.getenv('GROQ_API_KEY'):
         try:
             from groq import Groq
             ai_client = Groq(api_key=os.getenv('GROQ_API_KEY'))
+            test_response = ai_client.chat.completions.create(
+                model="llama3-70b-8192",  # Use a more powerful model
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=5
+            )
             ai_status = "Connected ✅"
             ai_provider = "Groq Llama"
-            logger.info("Groq connected successfully")
+            logger.info("Groq Llama connected successfully")
             return
         except Exception as e:
-            logger.error(f"Groq failed: {e}")
+            logger.error(f"Groq failed: {str(e)}")
     
     ai_status = "No API Keys Found"
     ai_provider = "Fallback System"
+    logger.error("No valid API keys found for any AI provider")
 
 # Initialize AI on startup
 initialize_ai()
 
-def get_current_day_info():
+def get_current_day_info(is_tomorrow=False):
     now = datetime.now()
+    if is_tomorrow:
+        now += timedelta(days=1)
     days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     arabic_days = ['الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت', 'الأحد']
     
@@ -91,20 +98,39 @@ def get_current_day_info():
         'current_day': days[now.weekday()],
         'current_day_arabic': arabic_days[now.weekday()],
         'current_time': now.strftime('%I:%M %p'),
-        'formatted_date': now.strftime('%A, %B %d, %Y')
+        'formatted_date': now.strftime('%A, %B %d, %Y'),
+        'is_tomorrow': is_tomorrow
     }
+
+def detect_intent(message):
+    message_lower = message.lower()
+    if any(word in message_lower for word in ['tomorrow', 'غداً']):
+        if any(word in message_lower for word in ['hours', 'open', 'closed', 'ساعات', 'مفتوح', 'مغلق']):
+            return 'hours_tomorrow'
+    if any(word in message_lower for word in ['book', 'appointment', 'schedule', 'موعد', 'حجز']):
+        return 'booking'
+    elif any(word in message_lower for word in ['price', 'cost', 'سعر', 'كم']):
+        return 'pricing'
+    elif any(word in message_lower for word in ['hours', 'open', 'closed', 'today', 'ساعات', 'مفتوح', 'مغلق', 'اليوم']):
+        return 'hours'
+    elif any(word in message_lower for word in ['service', 'offer', 'خدمات']):
+        return 'services'
+    else:
+        return 'general'
 
 def process_with_ai(message, business_data):
     if not ai_client:
+        logger.warning("No AI client available, falling back to smart fallback")
         return generate_smart_fallback(message, business_data)
     
     try:
-        day_info = get_current_day_info()
+        is_tomorrow = detect_intent(message) == 'hours_tomorrow'
+        day_info = get_current_day_info(is_tomorrow=is_tomorrow)
         business_name = business_data.get('name', 'Business')
         business_description = business_data.get('description', '')
         
         # Check if off-topic
-        business_keywords = ['appointment', 'book', 'price', 'cost', 'service', 'open', 'closed', 'hours', 'available', 'موعد', 'حجز', 'سعر', 'خدمة', 'مفتوح', 'مغلق', 'ساعات']
+        business_keywords = ['appointment', 'book', 'price', 'cost', 'service', 'open', 'closed', 'hours', 'available', 'tomorrow', 'موعد', 'حجز', 'سعر', 'خدمة', 'مفتوح', 'مغلق', 'ساعات', 'غداً']
         is_business_related = any(keyword in message.lower() for keyword in business_keywords)
         
         if not is_business_related:
@@ -121,42 +147,45 @@ def process_with_ai(message, business_data):
                 'powered_by': ai_provider
             }
         
-        system_prompt = f"""You are a professional AI assistant for {business_name}.
+        system_prompt = f"""You are a professional AI assistant for {business_name}, a business that provides services based on the following description: {business_description}
 
 CURRENT INFO:
-- Today is {day_info['current_day']} at {day_info['current_time']}
-
-BUSINESS INFO:
-{business_description}
+- Today is {day_info['current_day']}, {day_info['formatted_date']} at {day_info['current_time']}
+- Tomorrow is {get_current_day_info(is_tomorrow=True)['current_day']}, {get_current_day_info(is_tomorrow=True)['formatted_date']}
 
 RESPONSE RULES:
 1. Be concise and professional (max 2 sentences)
-2. For hours questions: Give direct yes/no answer about being open today, then state actual hours
-3. For appointments: Suggest specific available times
-4. For pricing: Give specific prices if mentioned in description
-5. Respond in the same language as the customer
-6. Don't repeat the entire business description
-7. Be helpful and direct
+2. For hours questions: Check if the query is about today or tomorrow, then give a direct yes/no answer about being open, followed by specific hours if available in the description
+3. For appointments: Suggest specific available times based on the business description
+4. For pricing: Provide specific prices if mentioned in the description
+5. Respond in the same language as the customer (Arabic or English)
+6. Do not repeat the entire business description in the response
+7. Be helpful, direct, and context-aware
+8. If the query mentions 'tomorrow' or 'غداً', provide information for {get_current_day_info(is_tomorrow=True)['current_day']}
+9. If the business description lacks specific details, respond based on general knowledge but stay professional
 
 Examples:
 - "Are you open today?" → "No, we're closed today. We're open Monday and Tuesday from 4pm-11pm."
-- "هل أنتم مفتوحين اليوم؟" → "لا، نحن مغلقون اليوم. نعمل يوم الاثنين والثلاثاء من 4 مساءً إلى 11 مساءً."
+- "Is the business closed tomorrow?" → "Yes, we're closed tomorrow (Sunday). We're open Monday and Tuesday from 4pm-11pm."
+- "هل أنتم مفتوحين غداً؟" → "نعم، نحن مفتوحون غداً (الأحد). نعمل من 4 مساءً إلى 11 مساءً."
+- "What services do you offer?" → "We offer general consultations and lab tests. Please check our website for more details."
 """
 
         # Call different AI providers
         if ai_provider == "Anthropic Claude":
             response = ai_client.messages.create(
-                model="claude-3-sonnet-20240229",
+                model="claude-3-5-sonnet-20241022",  # Updated to a more recent model
                 max_tokens=150,
+                temperature=0.3,
                 messages=[
                     {"role": "user", "content": f"{system_prompt}\n\nCustomer message: {message}"}
                 ]
             )
             ai_response = response.content[0].text.strip()
             
-        elif ai_provider == "OpenAI GPT-4":
+        elif ai_provider == "OpenAI GPT-4o-mini":
             response = ai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message}
@@ -173,7 +202,7 @@ Examples:
             
         elif ai_provider == "Groq Llama":
             response = ai_client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="llama3-70b-8192",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message}
@@ -193,44 +222,35 @@ Examples:
         }
         
     except Exception as e:
-        logger.error(f"AI API error: {e}")
+        logger.error(f"AI API error: {str(e)}")
         return generate_smart_fallback(message, business_data)
 
-def detect_intent(message):
-    message_lower = message.lower()
-    if any(word in message_lower for word in ['book', 'appointment', 'schedule', 'موعد', 'حجز']):
-        return 'booking'
-    elif any(word in message_lower for word in ['price', 'cost', 'سعر', 'كم']):
-        return 'pricing'
-    elif any(word in message_lower for word in ['hours', 'open', 'closed', 'today', 'ساعات', 'مفتوح', 'مغلق', 'اليوم']):
-        return 'hours'
-    elif any(word in message_lower for word in ['service', 'offer', 'خدمات']):
-        return 'services'
-    else:
-        return 'general'
-
 def generate_smart_fallback(message, business_data):
-    day_info = get_current_day_info()
+    is_tomorrow = detect_intent(message) == 'hours_tomorrow'
+    day_info = get_current_day_info(is_tomorrow=is_tomorrow)
     business_name = business_data.get('name', 'Business')
     business_desc = business_data.get('description', '').lower()
     
     is_arabic = any(char in message for char in 'أبتثجحخدذرزسشصضطظعغفقكلمنهوي')
     intent = detect_intent(message)
     
-    if intent == 'hours':
-        current_day = day_info['current_day'].lower()
-        is_open_today = any(day in business_desc for day in ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] if day in current_day[:3])
+    if intent in ['hours', 'hours_tomorrow']:
+        target_day = day_info['current_day'].lower()
+        target_day_short = target_day[:3]
+        is_open = any(day in business_desc for day in ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] if day in target_day_short)
         
         if is_arabic:
-            if is_open_today:
-                response = f"نعم، نحن مفتوحون اليوم. تحقق من ساعات العمل المحددة."
+            day_label = day_info['current_day_arabic'] + (' (غداً)' if is_tomorrow else '')
+            if is_open:
+                response = f"نعم، نحن مفتوحون {day_label}. تحقق من ساعات العمل المحددة في وصف الشركة."
             else:
-                response = f"لا، نحن مغلقون اليوم ({day_info['current_day_arabic']}). تحقق من جدول العمل."
+                response = f"لا، نحن مغلقون {day_label}. تحقق من جدول العمل في وصف الشركة."
         else:
-            if is_open_today:
-                response = f"Yes, we're open today. Please check our scheduled hours."
+            day_label = day_info['current_day'] + (' (tomorrow)' if is_tomorrow else '')
+            if is_open:
+                response = f"Yes, we're open {day_label}. Please check our scheduled hours in the business description."
             else:
-                response = f"No, we're closed today ({day_info['current_day']}). Check our operating schedule."
+                response = f"No, we're closed {day_label}. Check our operating schedule in the business description."
     else:
         if is_arabic:
             response = f"مرحباً بك في {business_name}! كيف يمكنني مساعدتك؟"
@@ -338,7 +358,7 @@ def home():
         </div>
         <div class="feature">
             <strong>📅 Date-Aware Responses</strong><br>
-            Knows current day and business hours
+            Knows current day, tomorrow, and business hours
         </div>
         <div class="feature">
             <strong>💼 Professional Handling</strong><br>
@@ -481,7 +501,7 @@ def dashboard():
             </div>
             <div class="form-group">
                 <label>Business Description (AI Training Data)</label>
-                <textarea id="business-description" rows="6" placeholder="Example: Alsinan Family Medical Clinic - Open Monday & Tuesday 4PM-11PM. Services: General consultation (150 SAR), Lab tests (80 SAR). Located in Qatif. Accepts insurance."></textarea>
+                <textarea id="business-description" rows="6" placeholder="Example: Alsinan Family Medical Clinic - Open Monday & Tuesday 4PM-11PM, closed Sunday. Services: General consultation (150 SAR), Lab tests (80 SAR). Located in Qatif. Accepts insurance."></textarea>
             </div>
             <button class="btn" onclick="createBusiness()">Create Business</button>
             
@@ -503,7 +523,7 @@ def dashboard():
             </div>
             <div class="form-group">
                 <label>Test Message (Arabic or English)</label>
-                <input type="text" id="test-message" placeholder="Try: 'Are you open today?' or 'هل أنتم مفتوحين اليوم؟'">
+                <input type="text" id="test-message" placeholder="Try: 'Are you open tomorrow?' or 'هل أنتم مفتوحين غداً؟'">
             </div>
             <button class="btn" onclick="testVoice()">🧠 Test AI Response</button>
             <div id="response-area">AI responses will appear here...</div>
